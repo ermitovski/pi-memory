@@ -413,11 +413,17 @@ async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryRe
 	];
 
 	try {
-		const response = await complete(
-			ctx.model,
-			{ systemPrompt: EXIT_SUMMARY_SYSTEM_PROMPT, messages: summaryMessages },
-			{ apiKey, reasoningEffort: "low" },
-		);
+		const timeoutMs = 300_000;
+		const response = await Promise.race([
+			complete(
+				ctx.model,
+				{ systemPrompt: EXIT_SUMMARY_SYSTEM_PROMPT, messages: summaryMessages },
+				{ apiKey, reasoningEffort: "low" },
+			),
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("Exit summary timed out")), timeoutMs),
+			),
+		]);
 
 		const summaryText = response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -910,6 +916,7 @@ export default function (pi: ExtensionAPI) {
 		const reason = exitSummaryReason ?? "session-end";
 		exitSummaryReason = null;
 
+		process.stderr.write(`pi-memory: generating exit summary (reason: ${reason})...\n`);
 		try {
 			if (reason) {
 				ensureDirs();
