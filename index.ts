@@ -420,9 +420,7 @@ async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryRe
 				{ systemPrompt: EXIT_SUMMARY_SYSTEM_PROMPT, messages: summaryMessages },
 				{ apiKey, reasoningEffort: "low" },
 			),
-			new Promise<never>((_, reject) =>
-				setTimeout(() => reject(new Error("Exit summary timed out")), timeoutMs),
-			),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Exit summary timed out")), timeoutMs)),
 		]);
 
 		const summaryText = response.content
@@ -771,9 +769,13 @@ export async function searchRelevantMemories(prompt: string): Promise<string> {
 		const hasCollection = await checkCollection("pi-memory");
 		if (!hasCollection) return "";
 
+		// Semantic (vector) search: measured 0.72 recall vs 0.00 for keyword on
+		// natural-language paraphrased questions (2026-07 benchmark). Collection
+		// override lets deployments point auto-recall at a curated subset.
+		const collection = process.env.PI_MEMORY_AUTOSEARCH_COLLECTION || "pi-memory";
 		const results = await Promise.race([
-			runQmdSearch("keyword", sanitized, 3),
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3_000)),
+			runQmdSearch("semantic", sanitized, 3, collection),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 5_000)),
 		]);
 
 		if (!results || results.results.length === 0) return "";
@@ -845,9 +847,10 @@ export function runQmdSearch(
 	mode: "keyword" | "semantic" | "deep",
 	query: string,
 	limit: number,
+	collection = "pi-memory",
 ): Promise<{ results: QmdSearchResult[]; stderr: string }> {
 	const subcommand = mode === "keyword" ? "search" : mode === "semantic" ? "vsearch" : "query";
-	const args = [subcommand, "--json", "-c", "pi-memory", "-n", String(limit), query];
+	const args = [subcommand, "--json", "-c", collection, "-n", String(limit), query];
 
 	return new Promise((resolve, reject) => {
 		execFileFn("qmd", args, { timeout: 60_000 }, (err, stdout, stderr) => {
@@ -1436,8 +1439,8 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Search across all memory files (MEMORY.md, SCRATCHPAD.md, daily logs).\n" +
 			"Modes:\n" +
-			"- 'keyword' (default, ~30ms): Fast BM25 search. Best for specific terms, dates, names, #tags, [[links]].\n" +
-			"- 'semantic' (~2s): Meaning-based search. Finds related concepts even with different wording.\n" +
+			"- 'semantic' (default, ~100ms warm): Meaning-based search. Finds related concepts even with different wording.\n" +
+			"- 'keyword' (~30ms): Fast BM25 search. Best for exact terms, dates, names, #tags, [[links]].\n" +
 			"- 'deep' (~10s): Hybrid search with reranking. Use when other modes don't find what you need.\n" +
 			"If semantic/deep warns about missing embeddings, run `qmd embed` once and retry.\n" +
 			"If the first search doesn't find what you need, try rephrasing or switching modes. " +
@@ -1446,7 +1449,7 @@ export default function (pi: ExtensionAPI) {
 			query: Type.String({ description: "Search query" }),
 			mode: Type.Optional(
 				StringEnum(["keyword", "semantic", "deep"] as const, {
-					description: "Search mode. Default: 'keyword'.",
+					description: "Search mode. Default: 'semantic'.",
 				}),
 			),
 			limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
@@ -1490,7 +1493,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const mode = params.mode ?? "keyword";
+			const mode = params.mode ?? "semantic";
 			const limit = params.limit ?? 5;
 
 			try {
