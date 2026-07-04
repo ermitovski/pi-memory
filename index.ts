@@ -412,15 +412,23 @@ async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryRe
 		},
 	];
 
+	// 60s is generous for a low-effort summary (measured ~10s on codex).
+	const timeoutMs = 60_000;
+	let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const timeoutMs = 300_000;
 		const response = await Promise.race([
 			complete(
 				ctx.model,
 				{ systemPrompt: EXIT_SUMMARY_SYSTEM_PROMPT, messages: summaryMessages },
 				{ apiKey, reasoningEffort: "low" },
 			),
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Exit summary timed out")), timeoutMs)),
+			new Promise<never>((_, reject) => {
+				// unref: a pending timer must never keep a short-lived `pi -p`
+				// process alive after the summary resolves (it used to force a
+				// hard ~5-minute lifetime on every -p run with this extension).
+				timeoutTimer = setTimeout(() => reject(new Error("Exit summary timed out")), timeoutMs);
+				timeoutTimer.unref?.();
+			}),
 		]);
 
 		const summaryText = response.content
@@ -436,6 +444,8 @@ async function generateExitSummary(ctx: ExtensionContext): Promise<ExitSummaryRe
 		return { summary: summaryText, hasMessages: true };
 	} catch (err) {
 		return { summary: null, error: err instanceof Error ? err.message : String(err), hasMessages: true };
+	} finally {
+		if (timeoutTimer) clearTimeout(timeoutTimer);
 	}
 }
 
