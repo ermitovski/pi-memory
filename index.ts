@@ -23,15 +23,31 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { complete, type Message, StringEnum } from "@mariozechner/pi-ai";
+import { complete, type Message } from "@earendil-works/pi-ai";
 import {
 	convertToLlm,
 	type ExtensionAPI,
 	type ExtensionContext,
 	type SessionEntry,
 	serializeConversation,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+
+/**
+ * Local copy of pi-ai's StringEnum helper, built on the SAME @sinclair/typebox
+ * this file uses for the rest of each tool schema. pi-ai >=0.74 builds it on
+ * the standalone `typebox` v1 package, and mixing its TUnsafe into a
+ * @sinclair Type.Object degrades the inferred param types to `unknown`.
+ * Runtime shape is identical ({type: "string", enum: [...]}, Google-compatible).
+ */
+function StringEnum<T extends readonly string[]>(values: T, options?: { description?: string; default?: T[number] }) {
+	return Type.Unsafe<T[number]>({
+		type: "string",
+		enum: [...values],
+		...(options?.description && { description: options.description }),
+		...(options?.default && { default: options.default }),
+	});
+}
 
 // ---------------------------------------------------------------------------
 // Paths (mutable for testing via _setBaseDir / _resetBaseDir)
@@ -1503,7 +1519,9 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const mode = params.mode ?? "semantic";
+			// Cast: @sinclair TUnsafe loses its literal type through pi-coding-agent's
+			// typebox-v1 Static inference; runtime values are constrained by the enum schema.
+			const mode = (params.mode ?? "semantic") as "keyword" | "semantic" | "deep";
 			const limit = params.limit ?? 5;
 
 			try {
